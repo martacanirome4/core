@@ -1,19 +1,77 @@
-#include <qpi.h>
+#include  "qpi.h"
 using namespace QPI;
 
-struct HM252
-{
-};
 
-struct HM25 : public ContractBase
+// Definición del contrato que hereda de ContractBase
+struct TRANSFERENCIA_CONDICIONAL : public ContractBase
 {
-public:
+    // Estructura para almacenar los detalles de una transferencia
+    struct Transferencia
+    {
+        uint64 id;              // ID único de la transferencia
+        uint64 nombre;          // Nombre/identificador del activo
+        sint64 cantidad;        // Cantidad a transferir
+        id emisor;              // Wallet del emisor
+        id receptor;            // Wallet del receptor
+        bit aprobadaPorReceptor;// Indica si el receptor ha aprobado
+        bit completada;         // Indica si la transferencia se ha completado
+    };
+
+    // Estructuras de entrada/salida para los procedimientos
+    struct CrearTransferencia_input
+    {
+        uint64 nombre;          // Nombre del activo a transferir
+        sint64 cantidad;        // Cantidad a transferir
+        id receptor;            // Wallet del destinatario
+    };
+    
+    struct CrearTransferencia_output
+    {
+        uint64 id;              // ID de la transferencia creada
+        bit exito;              // Indica si la creación fue exitosa
+    };
+
+    struct AprobarTransferencia_input
+    {
+        uint64 id;              // ID de la transferencia a aprobar
+    };
+    
+    struct AprobarTransferencia_output
+    {
+        bit exito;              // Indica si la aprobación fue exitosa
+    };
+
+    struct EjecutarTransferencia_input
+    {
+        uint64 id;              // ID de la transferencia a ejecutar
+    };
+    
+    struct EjecutarTransferencia_output
+    {
+        bit exito;              // Indica si la ejecución fue exitosa
+    };
+
+    struct ConsultarTransferencia_input
+    {
+        uint64 id;              // ID de la transferencia a consultar
+    };
+    
+    struct ConsultarTransferencia_output
+    {
+        uint64 nombre;          // Nombre del activo
+        sint64 cantidad;        // Cantidad a transferir
+        id emisor;              // Wallet del emisor
+        id receptor;            // Wallet del receptor
+        bit aprobadaPorReceptor;// Estado de aprobación
+        bit completada;         // Estado de completitud
+        bit existe;             // Indica si la transferencia existe
+    };
+
+    // Agregar estas estructuras para ser compatibles con HM25
     struct Echo_input{};
     struct Echo_output{};
-
     struct Burn_input{};
     struct Burn_output{};
-
     struct GetStats_input {};
     struct GetStats_output
     {
@@ -21,69 +79,125 @@ public:
         uint64 numberOfBurnCalls;
     };
 
-    // Input/Output para Deposit
-    struct Deposit_input {
-        string providerName;
-        Identity counterparty;            // wallet_address
-        Identity validator;
-        string clause1;
-        string clause2;
-        string clause3;
-        string productName;
-        uint64 quantity;
-        uint64 pricePerUnit;
-        uint64 totalPrice;
-        uint64 deliveryDeadlineEpoch;     // delivery_deadline
-        uint64 contractStartEpoch;        // contract_start_date
-    };
-    struct Deposit_output {};
-
-    struct Withdraw_input {};
-    struct Withdraw_output {};
-
-    struct Validate_input {};
-    struct Validate_output {};
-
-    struct GetDetails_input {};
-    struct GetDetails_output {
-        string providerName;
-        Identity creator;
-        Identity counterparty;
-        Identity validator;
-        string productName;
-        uint64 quantity;
-        uint64 pricePerUnit;
-        uint64 totalPrice;
-        uint64 deliveryDeadlineEpoch;
-        uint64 contractStartEpoch;
-        string clause1;
-        string clause2;
-        string clause3;
-        bool isActive;
-        bool isValidated;
-    };
-
-private:
-    // ==== Estado original ====
+protected:
+    // Variables de estado del contrato
+    Array<Transferencia, 100> transferencias;   // Almacena hasta 100 transferencias
+    uint64 contadorTransferencias = 0;          // Contador para asignar IDs únicos, inicializado a 0
+    
+    // Variables adicionales del template HM25
     uint64 numberOfEchoCalls;
     uint64 numberOfBurnCalls;
 
-    string providerName;
-    Identity counterparty;
-    Identity validator;
-    string productName;
-    uint64 quantity;
-    uint64 pricePerUnit;
-    uint64 totalPrice;
-    uint64 deliveryDeadlineEpoch;
-    uint64 contractStartEpoch;
-    string clause1;
-    string clause2;
-    string clause3;
-    bool isActive;
-    bool isValidated;
+    // Implementación de los procedimientos públicos
+    PUBLIC_PROCEDURE(CrearTransferencia)
+        // Verificar que el emisor tiene los fondos necesarios
+        Asset asset;
+        asset.assetName = input.nombre;
+        asset.issuer = qpi.invocator(); // El emisor es quien invoca el contrato
+        
+        // Verificar que hay espacio para una nueva transferencia
+        if (state.contadorTransferencias < 100) {
+            // Crear nueva transferencia
+            Transferencia nuevaTransferencia;
+            nuevaTransferencia.id = state.contadorTransferencias + 1;
+            nuevaTransferencia.nombre = input.nombre;
+            nuevaTransferencia.cantidad = input.cantidad;
+            nuevaTransferencia.emisor = qpi.invocator();
+            nuevaTransferencia.receptor = input.receptor;
+            nuevaTransferencia.aprobadaPorReceptor = false;
+            nuevaTransferencia.completada = false;
+            
+            // Guardar la transferencia en el estado
+            state.transferencias[state.contadorTransferencias] = nuevaTransferencia;
+            state.contadorTransferencias++;
+            
+            // Preparar respuesta
+            output.id = nuevaTransferencia.id;
+            output.exito = true;
+        } else {
+            // No hay espacio para más transferencias
+            output.id = 0;
+            output.exito = false;
+        }
+    _
 
-    // ==== Procedimientos originales ====
+    PUBLIC_PROCEDURE(AprobarTransferencia)
+        output.exito = false;
+        
+        // Buscar la transferencia por ID
+        for (uint64 i = 0; i < state.contadorTransferencias; i++) {
+            if (state.transferencias[i].id == input.id) {
+                // Verificar que quien invoca es el receptor
+                if (state.transferencias[i].receptor == qpi.invocator()) {
+                    // Verificar que la transferencia no esté ya completada
+                    if (!state.transferencias[i].completada) {
+                        // Aprobar la transferencia
+                        state.transferencias[i].aprobadaPorReceptor = true;
+                        output.exito = true;
+                    }
+                }
+                break;
+            }
+        }
+    _
+
+    PUBLIC_PROCEDURE(EjecutarTransferencia)
+        output.exito = false;
+        
+        // Buscar la transferencia por ID
+        for (uint64 i = 0; i < state.contadorTransferencias; i++) {
+            if (state.transferencias[i].id == input.id) {
+                // Verificar que quien invoca es el emisor
+                if (state.transferencias[i].emisor == qpi.invocator()) {
+                    // Verificar que la transferencia está aprobada pero no completada
+                    if (state.transferencias[i].aprobadaPorReceptor && !state.transferencias[i].completada) {
+                        // Realizar la transferencia del activo
+                        Asset asset;
+                        asset.assetName = state.transferencias[i].nombre;
+                        asset.issuer = state.transferencias[i].emisor;
+                        
+                        // Transferir la propiedad y posesión
+                        if (qpi.transferShareOwnershipAndPossession(
+                            asset.assetName, 
+                            asset.issuer, 
+                            state.transferencias[i].emisor, 
+                            state.transferencias[i].emisor, 
+                            state.transferencias[i].cantidad, 
+                            state.transferencias[i].receptor) > 0) {
+                            
+                            // Marcar como completada
+                            state.transferencias[i].completada = true;
+                            output.exito = true;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    _
+
+    PUBLIC_PROCEDURE(ConsultarTransferencia)
+        output.existe = false;
+        
+        // Buscar la transferencia por ID
+        for (uint64 i = 0; i < state.contadorTransferencias; i++) {
+            if (state.transferencias[i].id == input.id) {
+                // Copiar los datos a la salida
+                output.nombre = state.transferencias[i].nombre;
+                output.cantidad = state.transferencias[i].cantidad;
+                output.emisor = state.transferencias[i].emisor;
+                output.receptor = state.transferencias[i].receptor;
+                output.aprobadaPorReceptor = state.transferencias[i].aprobadaPorReceptor;
+                output.completada = state.transferencias[i].completada;
+                output.existe = true;
+                break;
+            }
+        }
+    _
+
+    /**
+    Send back the invocation amount
+    */
     PUBLIC_PROCEDURE(Echo)
         state.numberOfEchoCalls++;
         if (qpi.invocationReward() > 0)
@@ -91,7 +205,10 @@ private:
             qpi.transfer(qpi.invocator(), qpi.invocationReward());
         }
     _
-
+    
+    /**
+    * Burn all invocation amount
+    */
     PUBLIC_PROCEDURE(Burn)
         state.numberOfBurnCalls++;
         if (qpi.invocationReward() > 0)
@@ -99,92 +216,29 @@ private:
             qpi.burn(qpi.invocationReward());
         }
     _
-
+    
     PUBLIC_FUNCTION(GetStats)
         output.numberOfBurnCalls = state.numberOfBurnCalls;
         output.numberOfEchoCalls = state.numberOfEchoCalls;
     _
 
-    // ==== Nuevos procedimientos personalizados ====
-    PUBLIC_PROCEDURE(Deposit)
-        if (state.isActive) return;
-        if (qpi.invocationReward() <= 0) return;
-
-        state.providerName = input.providerName;
-        state.counterparty = input.counterparty;
-        state.validator = input.validator;
-        state.productName = input.productName;
-        state.quantity = input.quantity;
-        state.pricePerUnit = input.pricePerUnit;
-        state.totalPrice = qpi.invocationReward(); // Confirmamos que es igual al enviado
-        state.deliveryDeadlineEpoch = input.deliveryDeadlineEpoch;
-        state.contractStartEpoch = input.contractStartEpoch;
-        state.clause1 = input.clause1;
-        state.clause2 = input.clause2;
-        state.clause3 = input.clause3;
-        state.isActive = true;
-        state.isValidated = false;
-    _
-
-
-    PUBLIC_PROCEDURE(Validate)
-        if (!state.isActive) return;
-        if (qpi.invocator() != state.validator) return;
-
-        state.isValidated = true;
-    _
-
-    PUBLIC_PROCEDURE(Withdraw)
-        if (!state.isActive || !state.isValidated) return;
-        if (qpi.invocator() != state.counterparty) return;
-
-        uint64 payout = state.totalPrice;
-        // Penalización si hay retraso
-        uint64 currentEpoch = qpi.epochTime(); // Hora actual en epoch
-        if (currentEpoch > state.deliveryDeadlineEpoch) {
-            uint64 penalty = state.totalPrice / 10;
-            payout -= penalty;
-        }
-
-        qpi.transfer(state.counterparty, payout);
-        state.isActive = false;
-    _
-
-    PUBLIC_FUNCTION(GetContractDetails)
-        output.providerName = state.providerName;
-        output.creator = qpi.contractOwner();
-        output.counterparty = state.counterparty;
-        output.validator = state.validator;
-        output.productName = state.productName;
-        output.quantity = state.quantity;
-        output.pricePerUnit = state.pricePerUnit;
-        output.totalPrice = state.totalPrice;
-        output.deliveryDeadlineEpoch = state.deliveryDeadlineEpoch;
-        output.contractStartEpoch = state.contractStartEpoch;
-        output.clause1 = state.clause1;
-        output.clause2 = state.clause2;
-        output.clause3 = state.clause3;
-        output.isActive = state.isActive;
-        output.isValidated = state.isValidated;
-    _
-
-
-    // ==== Registro único de todas las funciones ====
+    // Registro de procedimientos públicos
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES
-        REGISTER_USER_PROCEDURE(Echo, 1);
-        REGISTER_USER_PROCEDURE(Burn, 2);
-        REGISTER_USER_PROCEDURE(Deposit, 3);
-        REGISTER_USER_PROCEDURE(Validate, 4);
-        REGISTER_USER_PROCEDURE(Withdraw, 5);
+        REGISTER_USER_PROCEDURE(CrearTransferencia, 1);
+        REGISTER_USER_PROCEDURE(AprobarTransferencia, 2);
+        REGISTER_USER_PROCEDURE(EjecutarTransferencia, 3);
+        REGISTER_USER_PROCEDURE(ConsultarTransferencia, 4);
+        REGISTER_USER_PROCEDURE(Echo, 5);
+        REGISTER_USER_PROCEDURE(Burn, 6);
         REGISTER_USER_FUNCTION(GetStats, 1);
-        REGISTER_USER_FUNCTION(GetContractDetails, 2);
     _
-
+    
+    // Inicialización de las variables de estado
     INITIALIZE
+        state.contadorTransferencias = 0;
         state.numberOfEchoCalls = 0;
         state.numberOfBurnCalls = 0;
-        state.isActive = false;
-        state.isValidated = false;
-        state.totalPrice = 0;
     _
 };
+message.txt
+10 KB
