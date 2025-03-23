@@ -20,74 +20,58 @@ public:
         uint64 numberOfBurnCalls;
     };
 
-    // Input/Output para Deposit
-    struct Deposit_input {
-        uint64 providerName;
-        uint64 counterparty;            // wallet_address
-        uint64 validator;
-        uint64 clause1;
-        uint64 clause2;
-        uint64 clause3;
-        uint64 productName;
-        uint64 quantity;
-        uint64 pricePerUnit;
-        uint64 totalPrice;
-        uint64 deliveryDeadlineEpoch;     // delivery_deadline
-        uint64 contractStartEpoch;        // contract_start_date
+    // WalletAgreement State Variables
+    id partyA;
+    id partyB;
+    id agreementName;
+    id agreementType;
+
+    uint64 depositAmount;
+    uint32 startDate;
+    uint32 paymentPeriodDays;
+    uint32 lastPaymentTick;
+    bit active;
+
+    // WalletAgreement I/O Structs
+    struct InitAgreement_input
+    {
+        id agreementName;
+        id agreementType;
+        id partyB;
+        uint64 depositAmount;
+        uint32 paymentPeriodDays;
     };
-    struct Deposit_output {};
 
-    struct Withdraw_input {};
-    struct Withdraw_output {};
+    typedef NoData InitAgreement_output;
 
-    struct Validate_input {};
-    struct Validate_output {};
+    struct Deposit_input { };
+    typedef NoData Deposit_output;
 
-    struct GetDetails_input {};
-    struct GetDetails_output {
-        uint64 providerName;
-        uint64 creator;
-        uint64 counterparty;
-        uint64 validator;
-        uint64 productName;
-        uint64 quantity;
-        uint64 pricePerUnit;
-        uint64 totalPrice;
-        uint64 deliveryDeadlineEpoch;
-        uint64 contractStartEpoch;
-        uint64 clause1;
-        uint64 clause2;
-        uint64 clause3;
-        bool isActive;
-        bool isValidated;
+    struct Withdraw_input { };
+    typedef NoData Withdraw_output;
+
+    struct GetAgreementDetails_input { };
+    struct GetAgreementDetails_output
+    {
+        id partyA;
+        id partyB;
+        id agreementName;
+        id agreementType;
+        uint64 depositAmount;
+        uint32 startDate;
+        uint32 paymentPeriodDays;
+        uint32 lastPaymentTick;
+        bit active;
     };
+
+    struct CancelAgreement_input { };
+    typedef NoData CancelAgreement_output;
 
 private:
     uint64 numberOfEchoCalls;
     uint64 numberOfBurnCalls;
 
-    struct StateData {
-        uint64 providerName;
-        uint64 counterparty;
-        uint64 validator;
-        uint64 clause1;
-        uint64 clause2;
-        uint64 clause3;
-        uint64 productName;
-        uint64 quantity;
-        uint64 pricePerUnit;
-        uint64 totalPrice;
-        uint64 deliveryDeadlineEpoch;
-        uint64 contractStartEpoch;
-        bool isActive;
-        bool isValidated;
-    };
-
-    StateData state;
-
-    /**
-    Send back the invocation amount
-    */
+    // Echo Procedure
     PUBLIC_PROCEDURE(Echo)
         state.numberOfEchoCalls++;
         if (qpi.invocationReward() > 0)
@@ -96,9 +80,7 @@ private:
         }
     _
 
-    /**
-    * Burn all invocation amount
-    */
+    // Burn Procedure
     PUBLIC_PROCEDURE(Burn)
         state.numberOfBurnCalls++;
         if (qpi.invocationReward() > 0)
@@ -112,18 +94,110 @@ private:
         output.numberOfEchoCalls = state.numberOfEchoCalls;
     _
 
-    REGISTER_USER_FUNCTIONS_AND_PROCEDURES
+    // WalletAgreement Procedures
 
+    PUBLIC_PROCEDURE(InitAgreement)
+        if (state.active)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            return;
+        }
+        state.partyA = qpi.invocator();
+        state.partyB = input.partyB;
+        state.agreementName = input.agreementName;
+        state.agreementType = input.agreementType;
+        state.depositAmount = input.depositAmount;
+        getCurrentDate(qpi, state.startDate);
+        state.paymentPeriodDays = input.paymentPeriodDays;
+        state.lastPaymentTick = qpi.tick();
+        state.active = 1;
+
+        if (qpi.invocationReward() > 0)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+        }
+    _
+
+    PUBLIC_PROCEDURE(Deposit)
+        if (qpi.invocator() != state.partyA || !state.active)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            return;
+        }
+        state.depositAmount += qpi.invocationReward();
+        qpi.burn(0);
+    _
+
+    PUBLIC_PROCEDURE(Withdraw)
+        if (qpi.invocator() != state.partyB || !state.active)
+        {
+            return;
+        }
+
+        uint32 ticksSinceLastPayment = qpi.tick() - state.lastPaymentTick;
+        uint32 ticksPerPeriod = state.paymentPeriodDays * TICKS_PER_DAY;
+
+        if (ticksSinceLastPayment < ticksPerPeriod)
+        {
+            return;
+        }
+
+        uint64 paymentAmount = state.depositAmount;
+
+        if (paymentAmount > 0)
+        {
+            qpi.transfer(state.partyB, paymentAmount);
+            state.depositAmount = 0;
+            state.lastPaymentTick = qpi.tick();
+        }
+    _
+
+    PUBLIC_PROCEDURE(CancelAgreement)
+        if (!state.active || (qpi.invocator() != state.partyA && qpi.invocator() != state.partyB))
+        {
+            return;
+        }
+
+        if (state.depositAmount > 0)
+        {
+            qpi.transfer(state.partyA, state.depositAmount);
+        }
+
+        state.active = 0;
+    _
+
+    PUBLIC_FUNCTION(GetAgreementDetails)
+        output.partyA = state.partyA;
+        output.partyB = state.partyB;
+        output.agreementName = state.agreementName;
+        output.agreementType = state.agreementType;
+        output.depositAmount = state.depositAmount;
+        output.startDate = state.startDate;
+        output.paymentPeriodDays = state.paymentPeriodDays;
+        output.lastPaymentTick = state.lastPaymentTick;
+        output.active = state.active;
+    _
+
+    REGISTER_USER_FUNCTIONS_AND_PROCEDURES
         REGISTER_USER_PROCEDURE(Echo, 1);
         REGISTER_USER_PROCEDURE(Burn, 2);
-
         REGISTER_USER_FUNCTION(GetStats, 1);
-    
+
+        REGISTER_USER_PROCEDURE(InitAgreement, 3);
+        REGISTER_USER_PROCEDURE(Deposit, 4);
+        REGISTER_USER_PROCEDURE(Withdraw, 5);
+        REGISTER_USER_PROCEDURE(CancelAgreement, 6);
+        REGISTER_USER_FUNCTION(GetAgreementDetails, 2);
     _
 
     INITIALIZE
         state.numberOfEchoCalls = 0;
         state.numberOfBurnCalls = 0;
+        state.active = 0;
     _
 
+    inline static void getCurrentDate(const QPI::QpiContextProcedureCall& qpi, uint32& res)
+    {
+        res = ((qpi.year() - 24) << 26) | (qpi.month() << 22) | (qpi.day() << 17) | (qpi.hour() << 12) | (qpi.minute() << 6) | qpi.second();
+    }
 };
