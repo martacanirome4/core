@@ -1,5 +1,7 @@
 using namespace QPI;
 
+constexpr uint32 TICKS_PER_DAY = 86400; // Define ticks per day if not provided by the QPI
+
 struct HM252
 {
 };
